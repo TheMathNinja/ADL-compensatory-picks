@@ -949,60 +949,112 @@ write_comp_picks_report_rmd <- function(path) {
 
 
 
-render_comp_picks_report <- function(
+render_and_publish_comp_picks_report <- function(
     season,
     base_dir = "C:/Users/filim/Documents/R/LeagueFeatures/CompensatoryPicks",
-    output_file = NULL,
-    publish_github = TRUE
+    github_remote = "https://github.com/TheMathNinja/ADL-compensatory-picks.git",
+    pages_url = "https://themathninja.github.io/ADL-compensatory-picks/",
+    repos = "https://cloud.r-project.org"
 ) {
   
-  if (!dir.exists(base_dir)) {
-    stop("Target directory does not exist:\n", base_dir)
+  # ---------- helpers ----------
+  git_run <- function(args) {
+    # args must be a character vector where each element is ONE argument
+    out <- system2("git", args = c("-C", base_dir, args), stdout = TRUE, stderr = TRUE)
+    status <- attr(out, "status")
+    if (!is.null(status) && status != 0) {
+      stop(paste0(
+        "Git command failed:\n  git ", paste(args, collapse = " "), "\n\n",
+        paste(out, collapse = "\n")
+      ))
+    }
+    out
   }
   
-  if (is.null(output_file)) {
-    output_file <- sprintf("comp_picks_%d.html", season)
+  is_git_repo <- function() {
+    out <- suppressWarnings(system2(
+      "git",
+      args = c("-C", base_dir, "rev-parse", "--is-inside-work-tree"),
+      stdout = TRUE, stderr = TRUE
+    ))
+    identical(trimws(paste(out, collapse = "")), "true")
   }
   
+  get_origin_url <- function() {
+    out <- suppressWarnings(system2(
+      "git",
+      args = c("-C", base_dir, "remote", "get-url", "origin"),
+      stdout = TRUE, stderr = TRUE
+    ))
+    if (length(out) == 0) return("")
+    trimws(out[1])
+  }
+  
+  drop_id_cols <- function(df) {
+    if (!is.data.frame(df)) return(df)
+    keep <- !grepl("_id$", names(df), ignore.case = TRUE)
+    df[, keep, drop = FALSE]
+  }
+  
+  # ---------- sanity checks ----------
+  if (!dir.exists(base_dir)) stop("Target directory does not exist:\n", base_dir)
+  
+  # ---------- packages ----------
+  required_pkgs <- c("rmarkdown", "knitr", "evaluate", "dplyr", "tibble", "tidyr", "DT", "htmlwidgets", "htmltools")
+  missing_pkgs <- required_pkgs[!vapply(required_pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(missing_pkgs) > 0) {
+    message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
+    install.packages(missing_pkgs, repos = repos)
+  }
+  if (!requireNamespace("DT", quietly = TRUE)) stop("DT still not available. Run install.packages('DT') manually to see the error.")
+  
+  # ---------- ensure Rmd exists ----------
   rmd_path <- file.path(base_dir, "comp_picks_report.Rmd")
-  html_path <- file.path(base_dir, output_file)
-  
   if (!file.exists(rmd_path)) {
     write_comp_picks_report_rmd(rmd_path)
   }
   
-  # ---- build data ----
+  # ---------- build objects ----------
   thr <- build_salary_thresholds(season, verbose = FALSE)
   thresholds_tbl <- thr$thresholds
   
   summary_lines_raw <- capture.output({
-    cfa_2025 <- build_cfa_events(season)
+    cfa_df <- build_cfa_events(season)
   })
-  
   summary_lines_raw <- gsub("^##\\s?", "", summary_lines_raw)
   
   start_i <- grep("^ADL Season:", summary_lines_raw)
   end_i   <- grep("^CFA cutoff \\(max of 65th and SD\\+100k\\):", summary_lines_raw)
-  
-  summary_lines <- summary_lines_raw[start_i:end_i]
-  
-  cancel_res <- cancel_cfa_events(cfa_2025)
-  nfc_picks  <- build_comp_pick_table(cancel_res, "NFC")
-  afc_picks  <- build_comp_pick_table(cancel_res, "AFC")
-  
-  drop_id_cols <- function(df) {
-    df[, !grepl("_id$", names(df), ignore.case = TRUE), drop = FALSE]
+  if (length(start_i) > 0 && length(end_i) > 0 && end_i[1] >= start_i[1]) {
+    summary_lines <- summary_lines_raw[start_i[1]:end_i[1]]
+  } else {
+    summary_lines <- summary_lines_raw[!grepl("^\\d+\\s+\\d+\\s+\\d+\\s+\\$?\\d", summary_lines_raw)]
   }
+  summary_lines <- summary_lines[trimws(summary_lines) != ""]
   
-  team_net_tbl       <- drop_id_cols(cancel_res$team_net)
-  cancels_tbl        <- drop_id_cols(cancel_res$cancels)
-  remaining_lost_tbl <- drop_id_cols(cancel_res$remaining_lost)
-  cfa_events_tbl     <- drop_id_cols(cfa_2025)
+  cancel_res <- cancel_cfa_events(cfa_df)
+  nfc_picks  <- build_comp_pick_table(cancel_res, conference = "NFC")
+  afc_picks  <- build_comp_pick_table(cancel_res, conference = "AFC")
+  
+  team_net_tbl <- cancel_res$team_net |>
+    dplyr::mutate(
+      bonus_sal_gained = ifelse(is.na(bonus_sal_gained), NA_real_, round(as.numeric(bonus_sal_gained), 1))
+    )
+  
+  cancels_tbl         <- cancel_res$cancels
+  remaining_lost_tbl  <- cancel_res$remaining_lost
+  cfa_events_tbl      <- cfa_df
+  
   thresholds_tbl     <- drop_id_cols(thresholds_tbl)
   nfc_picks          <- drop_id_cols(nfc_picks)
   afc_picks          <- drop_id_cols(afc_picks)
+  team_net_tbl       <- drop_id_cols(team_net_tbl)
+  cancels_tbl        <- drop_id_cols(cancels_tbl)
+  remaining_lost_tbl <- drop_id_cols(remaining_lost_tbl)
+  cfa_events_tbl     <- drop_id_cols(cfa_events_tbl)
   
-  # ---- render ----
+  # ---------- render to index.html ----------
+  output_file <- "index.html"
   rmarkdown::render(
     input       = rmd_path,
     output_dir  = base_dir,
@@ -1019,31 +1071,58 @@ render_comp_picks_report <- function(
     ), parent = globalenv())
   )
   
-  message("✅ Report rendered: ", html_path)
+  out_path <- normalizePath(file.path(base_dir, output_file), winslash = "/")
+  message("✅ Report rendered: ", out_path)
   
-  # ---- GitHub publish ----
-  if (publish_github) {
-    old_wd <- getwd()
-    setwd(base_dir)
-    
-    system("git add .", intern = TRUE)
-    system(
-      sprintf('git commit -m "Update compensatory picks report (%d)"', season),
-      intern = TRUE
-    )
-    system("git push", intern = TRUE)
-    
-    setwd(old_wd)
-    message("🚀 Published to GitHub")
+  # ---------- git: init if needed ----------
+  if (!is_git_repo()) {
+    message("Initializing git repo in: ", base_dir)
+    system2("git", args = c("-C", base_dir, "init"))
   }
   
-  invisible(html_path)
+  # ensure main branch
+  suppressWarnings(system2("git", args = c("-C", base_dir, "branch", "-M", "main"), stdout = TRUE, stderr = TRUE))
+  
+  # ensure origin remote
+  origin <- get_origin_url()
+  if (nzchar(origin) && origin != github_remote) {
+    message("Origin remote differs; resetting origin to: ", github_remote)
+    git_run(c("remote", "set-url", "origin", github_remote))
+  } else if (!nzchar(origin)) {
+    message("Adding origin remote: ", github_remote)
+    git_run(c("remote", "add", "origin", github_remote))
+  }
+  
+  # add everything
+  git_run(c("add", "-A"))
+  
+  # commit only if needed
+  status_out <- system2("git", args = c("-C", base_dir, "status", "--porcelain"), stdout = TRUE, stderr = TRUE)
+  if (length(status_out) > 0) {
+    commit_msg <- sprintf("Update compensatory picks report (%d)", season)
+    commit_msg <- paste(commit_msg, collapse = " ")  # ✅ FORCE length-1 string
+    git_run(c("commit", "-m", commit_msg))
+  } else {
+    message("No file changes detected; skipping commit.")
+  }
+  
+  # push
+  git_run(c("push", "-u", "origin", "main"))
+  
+  message("🚀 Pushed to GitHub: ", github_remote)
+  message("🌐 GitHub Pages URL (after one-time Pages enable): ", pages_url)
+  message(
+    "One-time GitHub Pages setup:\n",
+    "  Repo → Settings → Pages → Source: Deploy from a branch\n",
+    "  Branch: main | Folder: / (root)\n"
+  )
+  
+  invisible(out_path)
 }
 
 
 
 
+render_and_publish_comp_picks_report(2025)
 
-
-render_comp_picks_report(2025)
 
