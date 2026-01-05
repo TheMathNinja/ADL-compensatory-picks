@@ -634,7 +634,8 @@ build_comp_pick_table <- function(cancel_res, conference = c("AFC","NFC")) {
   miss_rl <- setdiff(req_rl, names(remaining_lost))
   if (length(miss_rl) > 0) stop("cancel_res$remaining_lost missing: ", paste(miss_rl, collapse=", "))
   
-  req_tn <- c("franchise_id","franchise_name","conference","max_comp_picks","bonus_sal_gained")
+  # NOTE: we now require net_cfas_lost for correct bonus eligibility
+  req_tn <- c("franchise_id","franchise_name","conference","max_comp_picks","bonus_sal_gained","net_cfas_lost")
   miss_tn <- setdiff(req_tn, names(team_net))
   if (length(miss_tn) > 0) stop("cancel_res$team_net missing: ", paste(miss_tn, collapse=", "))
   
@@ -647,9 +648,10 @@ build_comp_pick_table <- function(cancel_res, conference = c("AFC","NFC")) {
     filter(conference == !!conference) %>%
     mutate(
       franchise_id_chr = as.character(franchise_id),
-      max_comp_picks   = as.integer(max_comp_picks)
+      max_comp_picks   = as.integer(max_comp_picks),
+      net_cfas_lost    = as.integer(net_cfas_lost)
     ) %>%
-    select(franchise_id_chr, franchise_name, conference, max_comp_picks, bonus_sal_gained)
+    select(franchise_id_chr, franchise_name, conference, max_comp_picks, net_cfas_lost, bonus_sal_gained)
   
   # ---- attach max_comp_picks onto remaining_lost ----
   rl_conf2 <- rl_conf %>%
@@ -657,13 +659,18 @@ build_comp_pick_table <- function(cancel_res, conference = c("AFC","NFC")) {
     left_join(tn_conf, by = c("franchise_id_chr","conference"), suffix = c("", "_tn")) %>%
     mutate(
       max_comp_picks = coalesce(max_comp_picks, 0L),
-      # ordering for picks: round first (3 before 4 before 5), then salary desc
-      order_round = comp_round,
+      
+      # Tiering for final ordering / pick assignment
+      pick_tier = 1L,                 # 1 = NET (real comp picks from net CFAs)
+      pick_source = "NET",
+      
+      # ordering for NET picks: round first (3 before 4 before 5), then salary desc
+      order_round  = comp_round,
       order_salary = as.numeric(win_bid)
     )
   
-  # ---- TEAM TRIM: keep up to max_comp_picks per team (cap 4 already in team_net) ----
-  # We do this without slice_head(n=...) since n must be constant.
+  # ---- TEAM TRIM: keep up to max_comp_picks per team ----
+  # (avoid slice_head(n=...) because n must be constant)
   team_split <- rl_conf2 %>%
     arrange(order_round, desc(order_salary), player_name, player_id) %>%
     group_by(franchise_id_chr) %>%
@@ -674,148 +681,165 @@ build_comp_pick_table <- function(cancel_res, conference = c("AFC","NFC")) {
   
   for (i in seq_along(team_split)) {
     df_team <- team_split[[i]]
-    keep_n <- df_team$max_comp_picks[1]
-    keep_n <- max(0L, min(keep_n, nrow(df_team)))
+    keep_n  <- df_team$max_comp_picks[1]
+    keep_n  <- max(0L, min(keep_n, nrow(df_team)))
     
     team_kept_list[[i]] <- if (keep_n > 0) df_team[seq_len(keep_n), , drop = FALSE] else df_team[0, , drop = FALSE]
     team_trim_list[[i]] <- if (keep_n < nrow(df_team)) df_team[(keep_n + 1L):nrow(df_team), , drop = FALSE] else df_team[0, , drop = FALSE]
   }
   
-  team_kept  <- bind_rows(team_kept_list)
-  team_trim  <- bind_rows(team_trim_list)
+  team_kept <- bind_rows(team_kept_list)
+  team_trim <- bind_rows(team_trim_list)
   
-  # ---- CONFERENCE TRIM: keep top 16 by round then salary ----
-  conf_ranked <- team_kept %>%
+  # ---- CONFERENCE TRIM (NET picks only): keep top 16 by round then salary ----
+  conf_ranked_net <- team_kept %>%
     arrange(order_round, desc(order_salary), franchise_id_chr, player_name, player_id) %>%
     mutate(conf_rank = row_number())
   
-  conf_kept <- conf_ranked %>% filter(conf_rank <= 16)
-  conf_trim <- conf_ranked %>% filter(conf_rank > 16)
+  conf_kept_net <- conf_ranked_net %>% filter(conf_rank <= 16)
+  conf_trim_net <- conf_ranked_net %>% filter(conf_rank > 16)
   
-  # ---- if fewer than 16, add bonus picks (end of 5th) using bonus_sal_gained ----
-  n_have <- nrow(conf_kept)
+  # ---- If fewer than 16, add BONUS picks at END of 5th round (AFTER all NET picks) ----
+  n_have <- nrow(conf_kept_net)
   n_need <- 16 - n_have
   
   bonus_rows <- tibble()
   if (n_need > 0) {
     bonus_rows <- tn_conf %>%
-      filter(is.na(max_comp_picks) | max_comp_picks == 0L) %>%
-      filter(!is.na(bonus_sal_gained)) %>%
+      # BYLAW: only teams with 0 net CFAs and POSITIVE net salary lost
+      filter(net_cfas_lost == 0L, !is.na(bonus_sal_gained), bonus_sal_gained > 0) %>%
       arrange(desc(bonus_sal_gained), franchise_id_chr) %>%
       mutate(
-        comp_round = 5L,
-        player_id = NA_character_,
-        player_name = "BONUS PICK (net salary lost)",
-        win_bid = bonus_sal_gained,
-        order_round = 5L,
+        comp_round   = 5L,
+        player_id    = NA_character_,
+        player_name  = "BONUS PICK (net salary lost)",
+        win_bid      = as.numeric(bonus_sal_gained),
+        
+        pick_tier    = 2L,          # 2 = BONUS (always after NET in the 5th)
+        pick_source  = "BONUS",
+        
+        order_round  = 5L,
         order_salary = as.numeric(bonus_sal_gained)
       ) %>%
-      select(
-        franchise_id = franchise_id_chr,
+      transmute(
+        franchise_id   = franchise_id_chr,
         franchise_name,
         conference,
         player_id,
         player_name,
         win_bid,
         comp_round,
+        pick_tier,
+        pick_source,
         order_round,
         order_salary
       ) %>%
       slice_head(n = n_need)
-    
-    # NOTE: bonus picks are not "trimmed players", so no trim list needed
-    conf_kept <- bind_rows(
-      conf_kept %>% select(names(bonus_rows)),
-      bonus_rows
-    ) %>%
-      arrange(order_round, desc(order_salary), as.character(franchise_id), player_name)
-    
-    n_have <- nrow(conf_kept)
-    n_need <- 16 - n_have
   }
   
-  # ---- if still fewer than 16, fill with draft-order placeholders ----
+  conf_all <- bind_rows(
+    conf_kept_net %>%
+      transmute(
+        franchise_id   = franchise_id_chr,
+        franchise_name,
+        conference,
+        player_id,
+        player_name,
+        win_bid,
+        comp_round,
+        pick_tier,
+        pick_source,
+        order_round,
+        order_salary
+      ),
+    bonus_rows
+  )
+  
+  # ---- If STILL fewer than 16, fill with draft-order placeholders at END of 5th ----
+  n_have2 <- nrow(conf_all)
+  n_need2 <- 16 - n_have2
+  
   filler_rows <- tibble()
-  if (n_need > 0) {
+  if (n_need2 > 0) {
     filler_rows <- tibble(
-      franchise_id = NA_character_,
-      franchise_name = paste0("Draft Order ", seq_len(n_need)),
-      conference = conference,
-      player_id = NA_character_,
-      player_name = "FILLER PICK (draft order)",
-      win_bid = NA_real_,
-      comp_round = 5L,
-      order_round = 5L,
-      order_salary = -Inf
+      franchise_id   = NA_character_,
+      franchise_name = paste0("Draft Order ", seq_len(n_need2)),
+      conference     = conference,
+      player_id      = NA_character_,
+      player_name    = "FILLER PICK (draft order)",
+      win_bid        = NA_real_,
+      comp_round     = 5L,
+      
+      pick_tier      = 3L,     # 3 = FILLER (always last)
+      pick_source    = "FILLER",
+      
+      order_round    = 5L,
+      order_salary   = -Inf
     )
     
-    conf_kept <- bind_rows(conf_kept, filler_rows) %>%
-      arrange(order_round, desc(order_salary), franchise_name, player_name)
+    conf_all <- bind_rows(conf_all, filler_rows)
   }
   
-  # ---- assign Pick numbers: start at 17 within each round (3/4/5) ----
-  final_tbl <- conf_kept %>%
+  # ---- Assign Pick numbers: start at 17 within each round ----
+  # Ordering within each round:
+  #   NET first (tier 1) by salary desc
+  #   then BONUS (tier 2) by bonus salary desc
+  #   then FILLER (tier 3)
+  final_tbl <- conf_all %>%
     mutate(comp_round = as.integer(comp_round)) %>%
     group_by(comp_round) %>%
-    arrange(order_round, desc(order_salary), franchise_name, player_name, .by_group = TRUE) %>%
+    arrange(
+      pick_tier,
+      desc(order_salary),
+      franchise_name,
+      player_name,
+      .by_group = TRUE
+    ) %>%
     mutate(
       pick_in_round = 16 + row_number(),
-      # detect salary ties within round (ignore NA)
-      is_tie = !is.na(win_bid) & duplicated(win_bid) | 
-        (!is.na(win_bid) & duplicated(win_bid, fromLast = TRUE))
+      # Tie marking should only compare within the *same tier* in the round
+      is_tie = (!is.na(win_bid)) & (
+        duplicated(paste0(pick_tier, "::", win_bid)) |
+          duplicated(paste0(pick_tier, "::", win_bid), fromLast = TRUE)
+      )
     ) %>%
     ungroup() %>%
     mutate(
-      Pick = paste0(
-        comp_round, ".", pick_in_round,
-        ifelse(is_tie, "(t)", "")
-      )
+      Pick = paste0(comp_round, ".", pick_in_round, ifelse(is_tie, "(t)", ""))
     ) %>%
-  transmute(
-    Pick,
-    Team   = franchise_name,
-    Player = nflreadr::clean_player_names(player_name),
-    Salary = ifelse(
-      is.na(win_bid),
-      NA_character_,
-      paste0("$", formatC(win_bid, format = "f", digits = 1), "m")
+    transmute(
+      Pick,
+      Team   = franchise_name,
+      Player = nflreadr::clean_player_names(player_name),
+      Salary = ifelse(
+        is.na(win_bid),
+        NA_character_,
+        paste0("$", formatC(win_bid, format = "f", digits = 1), "m")
+      )
     )
-  )
-  
   
   # ---- PRINT TRIMS (conference-labeled) ----
   if (nrow(team_trim) > 0) {
     message("\n", conference, " TEAM TRIMS (players removed because a team exceeded its max_comp_picks, capped at 4):")
     print(
       team_trim %>%
-        transmute(
-          franchise_name,
-          player_name,
-          win_bid,
-          comp_round
-        ) %>%
+        transmute(franchise_name, player_name, win_bid, comp_round) %>%
         arrange(comp_round, desc(win_bid), franchise_name, player_name)
     )
   } else {
     message("\n", conference, " TEAM TRIMS: none")
   }
   
-  if (nrow(conf_trim) > 0) {
-    message("\n", conference, " CONFERENCE TRIMS (players removed because the conference exceeded 16 total comp picks):")
+  if (nrow(conf_trim_net) > 0) {
+    message("\n", conference, " CONFERENCE TRIMS (players removed because NET picks exceeded 16 total comp picks):")
     print(
-      conf_trim %>%
-        transmute(
-          franchise_name,
-          player_name,
-          win_bid,
-          comp_round
-        ) %>%
+      conf_trim_net %>%
+        transmute(franchise_name, player_name, win_bid, comp_round) %>%
         arrange(comp_round, desc(win_bid), franchise_name, player_name)
     )
   } else {
     message("\n", conference, " CONFERENCE TRIMS: none")
   }
-  
   
   final_tbl
 }
@@ -834,10 +858,10 @@ view(cancel_res_2024$cancels)
 view(cancel_res_2024$remaining_lost)
 
 
-afc_picks <- build_comp_pick_table(cancel_res, conference = "AFC")
-nfc_picks <- build_comp_pick_table(cancel_res, conference = "NFC")
-view(afc_picks)
-view(nfc_picks)
+afc_picks_2024 <- build_comp_pick_table(cancel_res_2024, conference = "AFC")
+nfc_picks_2024 <- build_comp_pick_table(cancel_res_2024, conference = "NFC")
+view(afc_picks_2024)
+view(nfc_picks_2024)
 
 
 
