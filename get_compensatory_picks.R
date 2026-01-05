@@ -824,14 +824,14 @@ build_comp_pick_table <- function(cancel_res, conference = c("AFC","NFC")) {
 
 
 
-cfa_2025 <- build_cfa_events(2025)
+cfa_2024 <- build_cfa_events(2024)
 
-cancel_res <- cancel_cfa_events(cfa_2025)
+cancel_res_2024 <- cancel_cfa_events(cfa_2024)
 
-view(cfa_2025)
-view(cancel_res$team_net)
-view(cancel_res$cancels)
-view(cancel_res$remaining_lost)
+view(cfa_2024)
+view(cancel_res_2024$team_net)
+view(cancel_res_2024$cancels)
+view(cancel_res_2024$remaining_lost)
 
 
 afc_picks <- build_comp_pick_table(cancel_res, conference = "AFC")
@@ -1196,7 +1196,7 @@ render_and_publish_comp_picks_report <- function(
 #   -> publishes to .../2026/  (2026 comp picks from 2025 free agency)
 # -------------------------------------------------------------------
 
-render_and_publish_comp_picks_report(2025)
+render_and_publish_comp_picks_report(2024)
 
 
 
