@@ -954,26 +954,24 @@ write_comp_picks_landing_page <- function(
     pages_base_url = "https://themathninja.github.io/ADL-compensatory-picks/",
     title = "ADL Compensatory Picks Archive"
 ) {
-  # Find year folders (numeric) that contain index.html
+  # We store pages in folders like /2026/index.html (award year)
   year_dirs <- list.dirs(base_dir, full.names = TRUE, recursive = FALSE)
   years <- basename(year_dirs)
   years <- years[grepl("^\\d{4}$", years)]
-  
-  # Keep only years that actually have an index.html
   years <- years[file.exists(file.path(base_dir, years, "index.html"))]
-  
   years <- sort(as.integer(years), decreasing = TRUE)
   years_chr <- as.character(years)
   
-  # Build simple HTML landing page (no dependencies)
   links_html <- if (length(years_chr) == 0) {
     "<p>No archived seasons have been published yet.</p>"
   } else {
-    items <- paste0(
-      '<li><a href="', years_chr, '/">ADL Season ', years_chr, "</a></li>",
-      collapse = "\n"
-    )
-    paste0("<ul>\n", items, "\n</ul>")
+    items <- vapply(years_chr, function(award_year) {
+      ufa_year <- as.integer(award_year) - 1L
+      label <- sprintf("%s ADL Compensatory Picks (from %s Free Agency)", award_year, ufa_year)
+      sprintf('<li><a href="%s/">%s</a></li>', award_year, label)
+    }, character(1))
+    
+    paste0("<ul>\n", paste(items, collapse = "\n"), "\n</ul>")
   }
   
   html <- paste0(
@@ -996,7 +994,7 @@ write_comp_picks_landing_page <- function(
 </head>
 <body>
   <h1>', title, '</h1>
-  <div class="note">Select a season:</div>
+  <div class="note">Select an award year:</div>
   ', links_html, '
   <div class="footer">
     Published via GitHub Pages: <a href="', pages_base_url, '">', pages_base_url, '</a>
@@ -1011,7 +1009,6 @@ write_comp_picks_landing_page <- function(
 
 
 
-
 render_and_publish_comp_picks_report <- function(
     season,
     base_dir = "C:/Users/filim/Documents/R/LeagueFeatures/CompensatoryPicks",
@@ -1020,6 +1017,9 @@ render_and_publish_comp_picks_report <- function(
     repos = "https://cloud.r-project.org",
     update_landing_page = TRUE
 ) {
+  
+  # We publish compensatory picks for the *following* year
+  award_year <- as.integer(season) + 1L
   
   # ---------- helpers ----------
   sh_quote <- function(x) {
@@ -1073,11 +1073,11 @@ render_and_publish_comp_picks_report <- function(
   rmd_path <- file.path(base_dir, "comp_picks_report.Rmd")
   if (!file.exists(rmd_path)) write_comp_picks_report_rmd(rmd_path)
   
-  # ---------- year output directory ----------
-  year_dir <- file.path(base_dir, as.character(season))
+  # ---------- award-year output directory ----------
+  year_dir <- file.path(base_dir, as.character(award_year))
   if (!dir.exists(year_dir)) dir.create(year_dir, recursive = TRUE)
   
-  # ---------- build objects ----------
+  # ---------- build objects (based on UFA year = `season`) ----------
   thr <- build_salary_thresholds(season, verbose = FALSE)
   thresholds_tbl <- thr$thresholds
   
@@ -1112,7 +1112,7 @@ render_and_publish_comp_picks_report <- function(
   remaining_lost_tbl <- drop_id_cols(remaining_lost_tbl)
   cfa_events_tbl     <- drop_id_cols(cfa_events_tbl)
   
-  # ---------- render to YEAR/index.html ----------
+  # ---------- render to AWARD_YEAR/index.html ----------
   rmarkdown::render(
     input       = rmd_path,
     output_dir  = year_dir,
@@ -1161,7 +1161,7 @@ render_and_publish_comp_picks_report <- function(
   ))
   
   if (length(status_out) > 0) {
-    commit_msg <- sprintf("Publish compensatory picks report for %d", season)
+    commit_msg <- sprintf("Publish compensatory picks (%d award year; from %d FA)", award_year, season)
     git_cmd(paste("commit -m", sh_quote(commit_msg)))
   } else {
     message("No file changes detected; skipping commit.")
@@ -1169,26 +1169,34 @@ render_and_publish_comp_picks_report <- function(
   
   git_cmd("push -u origin main")
   
-  year_url <- paste0(pages_base_url, season, "/")
+  year_url <- paste0(pages_base_url, award_year, "/")
   
   message("🚀 Pushed to GitHub: ", github_remote)
   message("🌐 Landing page: ", pages_base_url)
-  message("🌐 Year page: ", year_url)
-  message(
-    "GitHub Pages setting (one-time): Settings → Pages → Deploy from a branch → main / (root)\n"
-  )
+  message("🌐 Award-year page: ", year_url)
   
   invisible(list(
     landing = file.path(base_dir, "index.html"),
     year = file.path(year_dir, "index.html"),
-    year_url = year_url
+    year_url = year_url,
+    award_year = award_year
   ))
 }
 
 
 
-
+# -------------------------------------------------------------------
+# NOTE ON "season" INPUT:
+# The `season` you pass into render_and_publish_comp_picks_report(season)
+# is the ADL season whose *UFA (and trade) transactions* we are evaluating.
+#
+# Compensatory picks are awarded in the *following* offseason, so the
+# report is published under (season + 1) as the "award year" URL:
+#   render_and_publish_comp_picks_report(2025)
+#   -> publishes to .../2026/  (2026 comp picks from 2025 free agency)
+# -------------------------------------------------------------------
 
 render_and_publish_comp_picks_report(2025)
+
 
 
