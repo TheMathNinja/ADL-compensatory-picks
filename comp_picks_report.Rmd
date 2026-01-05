@@ -1,0 +1,96 @@
+---
+title: "ADL Compensatory Picks Report"
+output:
+  html_document:
+    theme: readable
+    toc: true
+    toc_depth: 3
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(dplyr)
+library(tibble)
+library(DT)
+```
+
+# Summary Report Of Compensatory Picks
+
+```{r summary_block}
+cat(paste0(summary_lines, collapse = "\n"))
+```
+
+# Salary Thresholds
+
+```{r thresholds_tbl}
+DT::datatable(
+  thresholds_tbl,
+  options = list(pageLength = 10, scrollX = TRUE),
+  rownames = FALSE
+)
+```
+
+# NFC Compensatory Picks
+
+<small>(ties to be broken by draft order)</small>
+
+```{r nfc_picks_tbl}
+DT::datatable(
+  nfc_picks,
+  options = list(pageLength = 25, scrollX = TRUE),
+  rownames = FALSE
+)
+```
+
+# AFC Compensatory Picks
+
+<small>(ties to be broken by draft order)</small>
+
+```{r afc_picks_tbl}
+DT::datatable(
+  afc_picks,
+  options = list(pageLength = 25, scrollX = TRUE),
+  rownames = FALSE
+)
+```
+
+# Team-By-Team Summary
+
+```{r team_net_tbl}
+DT::datatable(
+  team_net_tbl,
+  options = list(pageLength = 32, scrollX = TRUE),
+  rownames = FALSE
+)
+```
+
+# CFA Formula Player Cancellations
+
+```{r cancels_tbl}
+DT::datatable(
+  cancels_tbl,
+  options = list(pageLength = 50, scrollX = TRUE),
+  rownames = FALSE
+)
+```
+
+# Net CFAs Lost
+
+```{r remaining_lost_tbl}
+DT::datatable(
+  remaining_lost_tbl,
+  options = list(pageLength = 50, scrollX = TRUE),
+  rownames = FALSE
+)
+```
+
+# All CFA Events
+
+```{r cfa_events_tbl}
+DT::datatable(
+  cfa_events_tbl,
+  options = list(pageLength = 50, scrollX = TRUE),
+  rownames = FALSE
+)
+```
