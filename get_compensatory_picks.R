@@ -957,34 +957,33 @@ render_and_publish_comp_picks_report <- function(
     repos = "https://cloud.r-project.org"
 ) {
   
-  # ---------- helpers ----------
-  git_run <- function(args) {
-    # args must be a character vector where each element is ONE argument
-    out <- system2("git", args = c("-C", base_dir, args), stdout = TRUE, stderr = TRUE)
+  sh_quote <- function(x) {
+    x <- gsub('"', '\\"', x, fixed = TRUE)
+    paste0('"', x, '"')
+  }
+  
+  git_cmd <- function(cmd) {
+    full <- paste("git -C", sh_quote(base_dir), cmd)
+    out <- system(full, intern = TRUE, ignore.stderr = FALSE)
     status <- attr(out, "status")
     if (!is.null(status) && status != 0) {
-      stop(paste0(
-        "Git command failed:\n  git ", paste(args, collapse = " "), "\n\n",
-        paste(out, collapse = "\n")
-      ))
+      stop(paste0("Git command failed:\n  ", full, "\n\n", paste(out, collapse = "\n")))
     }
     out
   }
   
   is_git_repo <- function() {
-    out <- suppressWarnings(system2(
-      "git",
-      args = c("-C", base_dir, "rev-parse", "--is-inside-work-tree"),
-      stdout = TRUE, stderr = TRUE
+    out <- suppressWarnings(system(
+      paste("git -C", sh_quote(base_dir), "rev-parse --is-inside-work-tree"),
+      intern = TRUE, ignore.stderr = TRUE
     ))
     identical(trimws(paste(out, collapse = "")), "true")
   }
   
   get_origin_url <- function() {
-    out <- suppressWarnings(system2(
-      "git",
-      args = c("-C", base_dir, "remote", "get-url", "origin"),
-      stdout = TRUE, stderr = TRUE
+    out <- suppressWarnings(system(
+      paste("git -C", sh_quote(base_dir), "remote get-url origin"),
+      intern = TRUE, ignore.stderr = TRUE
     ))
     if (length(out) == 0) return("")
     trimws(out[1])
@@ -996,31 +995,21 @@ render_and_publish_comp_picks_report <- function(
     df[, keep, drop = FALSE]
   }
   
-  # ---------- sanity checks ----------
   if (!dir.exists(base_dir)) stop("Target directory does not exist:\n", base_dir)
   
-  # ---------- packages ----------
-  required_pkgs <- c("rmarkdown", "knitr", "evaluate", "dplyr", "tibble", "tidyr", "DT", "htmlwidgets", "htmltools")
+  required_pkgs <- c("rmarkdown","knitr","evaluate","dplyr","tibble","tidyr","DT","htmlwidgets","htmltools")
   missing_pkgs <- required_pkgs[!vapply(required_pkgs, requireNamespace, logical(1), quietly = TRUE)]
-  if (length(missing_pkgs) > 0) {
-    message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
-    install.packages(missing_pkgs, repos = repos)
-  }
-  if (!requireNamespace("DT", quietly = TRUE)) stop("DT still not available. Run install.packages('DT') manually to see the error.")
+  if (length(missing_pkgs) > 0) install.packages(missing_pkgs, repos = repos)
+  if (!requireNamespace("DT", quietly = TRUE)) stop("DT still not available.")
   
-  # ---------- ensure Rmd exists ----------
   rmd_path <- file.path(base_dir, "comp_picks_report.Rmd")
-  if (!file.exists(rmd_path)) {
-    write_comp_picks_report_rmd(rmd_path)
-  }
+  if (!file.exists(rmd_path)) write_comp_picks_report_rmd(rmd_path)
   
-  # ---------- build objects ----------
+  # --- data ---
   thr <- build_salary_thresholds(season, verbose = FALSE)
   thresholds_tbl <- thr$thresholds
   
-  summary_lines_raw <- capture.output({
-    cfa_df <- build_cfa_events(season)
-  })
+  summary_lines_raw <- capture.output({ cfa_df <- build_cfa_events(season) })
   summary_lines_raw <- gsub("^##\\s?", "", summary_lines_raw)
   
   start_i <- grep("^ADL Season:", summary_lines_raw)
@@ -1037,9 +1026,7 @@ render_and_publish_comp_picks_report <- function(
   afc_picks  <- build_comp_pick_table(cancel_res, conference = "AFC")
   
   team_net_tbl <- cancel_res$team_net |>
-    dplyr::mutate(
-      bonus_sal_gained = ifelse(is.na(bonus_sal_gained), NA_real_, round(as.numeric(bonus_sal_gained), 1))
-    )
+    dplyr::mutate(bonus_sal_gained = ifelse(is.na(bonus_sal_gained), NA_real_, round(as.numeric(bonus_sal_gained), 1)))
   
   cancels_tbl         <- cancel_res$cancels
   remaining_lost_tbl  <- cancel_res$remaining_lost
@@ -1053,72 +1040,60 @@ render_and_publish_comp_picks_report <- function(
   remaining_lost_tbl <- drop_id_cols(remaining_lost_tbl)
   cfa_events_tbl     <- drop_id_cols(cfa_events_tbl)
   
-  # ---------- render to index.html ----------
-  output_file <- "index.html"
+  # --- render to index.html ---
   rmarkdown::render(
-    input       = rmd_path,
-    output_dir  = base_dir,
-    output_file = output_file,
+    input = rmd_path,
+    output_dir = base_dir,
+    output_file = "index.html",
     envir = list2env(list(
-      summary_lines      = summary_lines,
-      thresholds_tbl     = thresholds_tbl,
-      nfc_picks          = nfc_picks,
-      afc_picks          = afc_picks,
-      team_net_tbl       = team_net_tbl,
-      cancels_tbl        = cancels_tbl,
+      summary_lines = summary_lines,
+      thresholds_tbl = thresholds_tbl,
+      nfc_picks = nfc_picks,
+      afc_picks = afc_picks,
+      team_net_tbl = team_net_tbl,
+      cancels_tbl = cancels_tbl,
       remaining_lost_tbl = remaining_lost_tbl,
-      cfa_events_tbl     = cfa_events_tbl
+      cfa_events_tbl = cfa_events_tbl
     ), parent = globalenv())
   )
   
-  out_path <- normalizePath(file.path(base_dir, output_file), winslash = "/")
-  message("✅ Report rendered: ", out_path)
+  message("✅ Report rendered: ", file.path(base_dir, "index.html"))
   
-  # ---------- git: init if needed ----------
-  if (!is_git_repo()) {
-    message("Initializing git repo in: ", base_dir)
-    system2("git", args = c("-C", base_dir, "init"))
-  }
+  # --- git wiring ---
+  if (!is_git_repo()) git_cmd("init")
+  suppressWarnings(system(paste("git -C", sh_quote(base_dir), "branch -M main"), intern = TRUE, ignore.stderr = TRUE))
   
-  # ensure main branch
-  suppressWarnings(system2("git", args = c("-C", base_dir, "branch", "-M", "main"), stdout = TRUE, stderr = TRUE))
-  
-  # ensure origin remote
   origin <- get_origin_url()
-  if (nzchar(origin) && origin != github_remote) {
-    message("Origin remote differs; resetting origin to: ", github_remote)
-    git_run(c("remote", "set-url", "origin", github_remote))
-  } else if (!nzchar(origin)) {
-    message("Adding origin remote: ", github_remote)
-    git_run(c("remote", "add", "origin", github_remote))
+  if (!nzchar(origin)) {
+    git_cmd(paste("remote add origin", sh_quote(github_remote)))
+  } else if (origin != github_remote) {
+    git_cmd(paste("remote set-url origin", sh_quote(github_remote)))
   }
   
-  # add everything
-  git_run(c("add", "-A"))
+  git_cmd("add -A")
   
-  # commit only if needed
-  status_out <- system2("git", args = c("-C", base_dir, "status", "--porcelain"), stdout = TRUE, stderr = TRUE)
+  status_out <- suppressWarnings(system(
+    paste("git -C", sh_quote(base_dir), "status --porcelain"),
+    intern = TRUE, ignore.stderr = TRUE
+  ))
+  
   if (length(status_out) > 0) {
     commit_msg <- sprintf("Update compensatory picks report (%d)", season)
-    commit_msg <- paste(commit_msg, collapse = " ")  # ✅ FORCE length-1 string
-    git_run(c("commit", "-m", commit_msg))
+    git_cmd(paste("commit -m", sh_quote(commit_msg)))
   } else {
     message("No file changes detected; skipping commit.")
   }
   
-  # push
-  git_run(c("push", "-u", "origin", "main"))
+  git_cmd("push -u origin main")
   
   message("🚀 Pushed to GitHub: ", github_remote)
-  message("🌐 GitHub Pages URL (after one-time Pages enable): ", pages_url)
-  message(
-    "One-time GitHub Pages setup:\n",
-    "  Repo → Settings → Pages → Source: Deploy from a branch\n",
-    "  Branch: main | Folder: / (root)\n"
-  )
+  message("🌐 GitHub Pages URL: ", pages_url)
+  message("If Pages isn't live yet: Settings → Pages → main / (root)")
   
-  invisible(out_path)
+  invisible(file.path(base_dir, "index.html"))
 }
+
+
 
 
 
