@@ -1199,7 +1199,7 @@ render_and_publish_comp_picks_report <- function(
 #   -> publishes to .../2026/  (2026 comp picks from 2025 free agency)
 # -------------------------------------------------------------------
 
-render_and_publish_comp_picks_report(2024)
+render_and_publish_comp_picks_report(2025)
 
 
 
