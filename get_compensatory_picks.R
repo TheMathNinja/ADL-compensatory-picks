@@ -953,10 +953,12 @@ render_and_publish_comp_picks_report <- function(
     season,
     base_dir = "C:/Users/filim/Documents/R/LeagueFeatures/CompensatoryPicks",
     github_remote = "https://github.com/TheMathNinja/ADL-compensatory-picks.git",
-    pages_url = "https://themathninja.github.io/ADL-compensatory-picks/",
+    # This is the *base* pages url for the repo (not year-specific)
+    pages_base_url = "https://themathninja.github.io/ADL-compensatory-picks/",
     repos = "https://cloud.r-project.org"
 ) {
   
+  # ---------- helpers ----------
   sh_quote <- function(x) {
     x <- gsub('"', '\\"', x, fixed = TRUE)
     paste0('"', x, '"')
@@ -995,17 +997,24 @@ render_and_publish_comp_picks_report <- function(
     df[, keep, drop = FALSE]
   }
   
+  # ---------- sanity checks ----------
   if (!dir.exists(base_dir)) stop("Target directory does not exist:\n", base_dir)
   
+  # ---------- packages ----------
   required_pkgs <- c("rmarkdown","knitr","evaluate","dplyr","tibble","tidyr","DT","htmlwidgets","htmltools")
   missing_pkgs <- required_pkgs[!vapply(required_pkgs, requireNamespace, logical(1), quietly = TRUE)]
   if (length(missing_pkgs) > 0) install.packages(missing_pkgs, repos = repos)
   if (!requireNamespace("DT", quietly = TRUE)) stop("DT still not available.")
   
+  # ---------- ensure Rmd exists ----------
   rmd_path <- file.path(base_dir, "comp_picks_report.Rmd")
   if (!file.exists(rmd_path)) write_comp_picks_report_rmd(rmd_path)
   
-  # --- data ---
+  # ---------- year output directory ----------
+  year_dir <- file.path(base_dir, as.character(season))
+  if (!dir.exists(year_dir)) dir.create(year_dir, recursive = TRUE)
+  
+  # ---------- build objects ----------
   thr <- build_salary_thresholds(season, verbose = FALSE)
   thresholds_tbl <- thr$thresholds
   
@@ -1040,26 +1049,27 @@ render_and_publish_comp_picks_report <- function(
   remaining_lost_tbl <- drop_id_cols(remaining_lost_tbl)
   cfa_events_tbl     <- drop_id_cols(cfa_events_tbl)
   
-  # --- render to index.html ---
+  # ---------- render to YEAR/index.html ----------
   rmarkdown::render(
-    input = rmd_path,
-    output_dir = base_dir,
+    input       = rmd_path,
+    output_dir  = year_dir,
     output_file = "index.html",
     envir = list2env(list(
-      summary_lines = summary_lines,
-      thresholds_tbl = thresholds_tbl,
-      nfc_picks = nfc_picks,
-      afc_picks = afc_picks,
-      team_net_tbl = team_net_tbl,
-      cancels_tbl = cancels_tbl,
+      summary_lines      = summary_lines,
+      thresholds_tbl     = thresholds_tbl,
+      nfc_picks          = nfc_picks,
+      afc_picks          = afc_picks,
+      team_net_tbl       = team_net_tbl,
+      cancels_tbl        = cancels_tbl,
       remaining_lost_tbl = remaining_lost_tbl,
-      cfa_events_tbl = cfa_events_tbl
+      cfa_events_tbl     = cfa_events_tbl
     ), parent = globalenv())
   )
   
-  message("✅ Report rendered: ", file.path(base_dir, "index.html"))
+  out_path <- normalizePath(file.path(year_dir, "index.html"), winslash = "/")
+  message("✅ Report rendered: ", out_path)
   
-  # --- git wiring ---
+  # ---------- git wiring ----------
   if (!is_git_repo()) git_cmd("init")
   suppressWarnings(system(paste("git -C", sh_quote(base_dir), "branch -M main"), intern = TRUE, ignore.stderr = TRUE))
   
@@ -1070,6 +1080,7 @@ render_and_publish_comp_picks_report <- function(
     git_cmd(paste("remote set-url origin", sh_quote(github_remote)))
   }
   
+  # add everything (including the new YEAR/ folder)
   git_cmd("add -A")
   
   status_out <- suppressWarnings(system(
@@ -1078,7 +1089,7 @@ render_and_publish_comp_picks_report <- function(
   ))
   
   if (length(status_out) > 0) {
-    commit_msg <- sprintf("Update compensatory picks report (%d)", season)
+    commit_msg <- sprintf("Publish compensatory picks report for %d", season)
     git_cmd(paste("commit -m", sh_quote(commit_msg)))
   } else {
     message("No file changes detected; skipping commit.")
@@ -1086,11 +1097,17 @@ render_and_publish_comp_picks_report <- function(
   
   git_cmd("push -u origin main")
   
-  message("🚀 Pushed to GitHub: ", github_remote)
-  message("🌐 GitHub Pages URL: ", pages_url)
-  message("If Pages isn't live yet: Settings → Pages → main / (root)")
+  year_url <- paste0(pages_base_url, season, "/")
   
-  invisible(file.path(base_dir, "index.html"))
+  message("🚀 Pushed to GitHub: ", github_remote)
+  message("🌐 Year-specific URL: ", year_url)
+  message(
+    "One-time GitHub Pages setup (if not already done):\n",
+    "  Repo → Settings → Pages → Source: Deploy from a branch\n",
+    "  Branch: main | Folder: / (root)\n"
+  )
+  
+  invisible(out_path)
 }
 
 
