@@ -949,13 +949,76 @@ write_comp_picks_report_rmd <- function(path) {
 
 
 
+write_comp_picks_landing_page <- function(
+    base_dir,
+    pages_base_url = "https://themathninja.github.io/ADL-compensatory-picks/",
+    title = "ADL Compensatory Picks Archive"
+) {
+  # Find year folders (numeric) that contain index.html
+  year_dirs <- list.dirs(base_dir, full.names = TRUE, recursive = FALSE)
+  years <- basename(year_dirs)
+  years <- years[grepl("^\\d{4}$", years)]
+  
+  # Keep only years that actually have an index.html
+  years <- years[file.exists(file.path(base_dir, years, "index.html"))]
+  
+  years <- sort(as.integer(years), decreasing = TRUE)
+  years_chr <- as.character(years)
+  
+  # Build simple HTML landing page (no dependencies)
+  links_html <- if (length(years_chr) == 0) {
+    "<p>No archived seasons have been published yet.</p>"
+  } else {
+    items <- paste0(
+      '<li><a href="', years_chr, '/">ADL Season ', years_chr, "</a></li>",
+      collapse = "\n"
+    )
+    paste0("<ul>\n", items, "\n</ul>")
+  }
+  
+  html <- paste0(
+    '<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>', title, '</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 2rem; line-height: 1.4; }
+    h1 { margin-top: 0; }
+    .note { color: #444; margin-bottom: 1rem; }
+    ul { padding-left: 1.25rem; }
+    li { margin: 0.35rem 0; }
+    a { text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .footer { margin-top: 2rem; font-size: 0.9rem; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>', title, '</h1>
+  <div class="note">Select a season:</div>
+  ', links_html, '
+  <div class="footer">
+    Published via GitHub Pages: <a href="', pages_base_url, '">', pages_base_url, '</a>
+  </div>
+</body>
+</html>'
+  )
+  
+  writeLines(html, con = file.path(base_dir, "index.html"))
+  invisible(file.path(base_dir, "index.html"))
+}
+
+
+
+
 render_and_publish_comp_picks_report <- function(
     season,
     base_dir = "C:/Users/filim/Documents/R/LeagueFeatures/CompensatoryPicks",
     github_remote = "https://github.com/TheMathNinja/ADL-compensatory-picks.git",
-    # This is the *base* pages url for the repo (not year-specific)
     pages_base_url = "https://themathninja.github.io/ADL-compensatory-picks/",
-    repos = "https://cloud.r-project.org"
+    repos = "https://cloud.r-project.org",
+    update_landing_page = TRUE
 ) {
   
   # ---------- helpers ----------
@@ -1066,8 +1129,18 @@ render_and_publish_comp_picks_report <- function(
     ), parent = globalenv())
   )
   
-  out_path <- normalizePath(file.path(year_dir, "index.html"), winslash = "/")
-  message("✅ Report rendered: ", out_path)
+  year_index_path <- normalizePath(file.path(year_dir, "index.html"), winslash = "/")
+  message("✅ Year report rendered: ", year_index_path)
+  
+  # ---------- landing page ----------
+  if (isTRUE(update_landing_page)) {
+    landing_path <- write_comp_picks_landing_page(
+      base_dir = base_dir,
+      pages_base_url = pages_base_url,
+      title = "ADL Compensatory Picks Archive"
+    )
+    message("✅ Landing page updated: ", normalizePath(landing_path, winslash = "/"))
+  }
   
   # ---------- git wiring ----------
   if (!is_git_repo()) git_cmd("init")
@@ -1080,7 +1153,6 @@ render_and_publish_comp_picks_report <- function(
     git_cmd(paste("remote set-url origin", sh_quote(github_remote)))
   }
   
-  # add everything (including the new YEAR/ folder)
   git_cmd("add -A")
   
   status_out <- suppressWarnings(system(
@@ -1100,16 +1172,18 @@ render_and_publish_comp_picks_report <- function(
   year_url <- paste0(pages_base_url, season, "/")
   
   message("🚀 Pushed to GitHub: ", github_remote)
-  message("🌐 Year-specific URL: ", year_url)
+  message("🌐 Landing page: ", pages_base_url)
+  message("🌐 Year page: ", year_url)
   message(
-    "One-time GitHub Pages setup (if not already done):\n",
-    "  Repo → Settings → Pages → Source: Deploy from a branch\n",
-    "  Branch: main | Folder: / (root)\n"
+    "GitHub Pages setting (one-time): Settings → Pages → Deploy from a branch → main / (root)\n"
   )
   
-  invisible(out_path)
+  invisible(list(
+    landing = file.path(base_dir, "index.html"),
+    year = file.path(year_dir, "index.html"),
+    year_url = year_url
+  ))
 }
-
 
 
 
