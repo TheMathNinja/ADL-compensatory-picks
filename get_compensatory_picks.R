@@ -845,27 +845,6 @@ build_comp_pick_table <- function(cancel_res, conference = c("AFC","NFC")) {
 }
 
 
-
-
-
-cfa_2024 <- build_cfa_events(2024)
-
-cancel_res_2024 <- cancel_cfa_events(cfa_2024)
-
-view(cfa_2024)
-view(cancel_res_2024$team_net)
-view(cancel_res_2024$cancels)
-view(cancel_res_2024$remaining_lost)
-
-
-afc_picks_2024 <- build_comp_pick_table(cancel_res_2024, conference = "AFC")
-nfc_picks_2024 <- build_comp_pick_table(cancel_res_2024, conference = "NFC")
-view(afc_picks_2024)
-view(nfc_picks_2024)
-
-
-
-
 # ============================================================
 # PUBLISHING: HTML REPORT (GitHub Pages-friendly)
 # ============================================================
